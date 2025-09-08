@@ -1,0 +1,15 @@
+# Testing dependencies for shadow_utils tests
+# Install with: pip install -r tests/requirements-test.txt
+
+# Core testing framework
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Mocking and test utilities
+pytest-mock>=3.10.0
+
+# Coverage reporting (optional)
+pytest-cov>=4.0.0
+
+# For running tests with different Python versions (optional)
+tox>=4.0.0
