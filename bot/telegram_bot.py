@@ -61,7 +61,7 @@ def telegram_bot():
                 print("Error: TELEGRAM_BOT_TOKEN is not set")
                 return
                 
-            app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).build()
+            app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).connect_timeout(120).read_timeout(120).write_timeout(120).build()
             
             # Re-add handlers for the new app instance
             app.add_handler(CommandHandler("start", bot.start_command))
@@ -78,7 +78,7 @@ def telegram_bot():
             app.add_error_handler(bot.error)
             
             print(f"Starting bot (attempt {attempt + 1}/{max_retries})...")
-            app.run_polling(timeout=30, poll_interval=1)
+            app.run_polling(timeout=120, poll_interval=1)
             break  # Success, exit retry loop
             
         except Exception as e:

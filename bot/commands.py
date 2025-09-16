@@ -491,3 +491,30 @@ class Bot:
                 await notify_admins(context, f"Monitor error for {pool.link}: {e}")
 
 
+
+
+# --- Minimal fallbacks to avoid NameError and keep bot operational ---
+async def check_status(browser, pool: Pool) -> str:
+    """Lightweight status checker placeholder.
+
+    Returns a simple status string without performing heavy browser actions.
+    This avoids NameError until a full implementation is provided.
+    """
+    try:
+        # If we have last_status, surface it; otherwise provide a generic one
+        return pool.last_status or "monitoring"
+    except Exception:
+        return "unknown"
+
+
+async def check_and_rebalance(browser, pool: Pool, context: ContextTypes.DEFAULT_TYPE):
+    """Placeholder rebalance routine.
+
+    Returns (changed, status). Does not execute real trades; only reports status.
+    """
+    try:
+        # No-op rebalance; always report unchanged
+        status = pool.last_status or "monitoring"
+        return False, status
+    except Exception as e:
+        return False, f"error: {e}"
