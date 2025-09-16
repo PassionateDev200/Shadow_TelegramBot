@@ -64,14 +64,15 @@ class Shadow:
         except (ValueError, AttributeError):
             upper_range = None
             lower_range = None
-
+        print("=======upper_range ===> ", upper_range, "=======lower_range ===> ", lower_range);
         btn = shadow.get_by_role("button", name="Deposit")
         if await btn.is_disabled():
             await update.message.reply_text("Your Balance is insufficient")
             return None, None
         else:
             await btn.click()
-            await shadow.get_by_role("button", name="Confirm Swap").click()
+            print("===========================================================");
+            # await shadow.get_by_role("button", name="Confirm Swap").click()
             await update.message.reply_text("Liquidity added successfully!")
             return upper_range, lower_range
 

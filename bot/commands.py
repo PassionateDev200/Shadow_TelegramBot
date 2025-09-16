@@ -290,7 +290,6 @@ class Bot:
                             owner_chat_id=update.effective_chat.id if update.effective_chat else None,
                         )
                         self.pools.append(pool)
-                        # Persist only if pools exist, preserve current settings
                         save_state(self.pools, self.settings)
                         await update.message.reply_text("✅ Pool added and being monitored.")
                     else:
