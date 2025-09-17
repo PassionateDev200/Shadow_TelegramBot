@@ -29,6 +29,7 @@ def telegram_bot():
 
     app.add_handler(CommandHandler("add", bot.add_command))
     app.add_handler(CommandHandler("remove", bot.remove_command))
+    app.add_handler(CommandHandler("withdraw", bot.withdraw_command))
     app.add_handler(CommandHandler("list", bot.list_command))
     app.add_handler(CommandHandler("status", bot.status_command))
     app.add_handler(CommandHandler("set_threshold", bot.set_threshold_command))
@@ -69,6 +70,7 @@ def telegram_bot():
             app.add_handler(CommandHandler("disconnect", bot.disconnect_command))
             app.add_handler(CommandHandler("add", bot.add_command))
             app.add_handler(CommandHandler("remove", bot.remove_command))
+            app.add_handler(CommandHandler("withdraw", bot.withdraw_command))
             app.add_handler(CommandHandler("list", bot.list_command))
             app.add_handler(CommandHandler("status", bot.status_command))
             app.add_handler(CommandHandler("set_threshold", bot.set_threshold_command))
