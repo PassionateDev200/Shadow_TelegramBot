@@ -64,12 +64,14 @@ class Shadow:
         except (ValueError, AttributeError):
             upper_range = None
             lower_range = None
+        print("=======upper_range ===> ", upper_range, "=======lower_range ===> ", lower_range);
         btn = shadow.get_by_role("button", name="Deposit")
         if await btn.is_disabled():
             await update.message.reply_text("Your Balance is insufficient")
             return None, None
         else:
             await btn.click()
+            print("===========================================================");
             # await shadow.get_by_role("button", name="Confirm Swap").click()
             await update.message.reply_text("Liquidity added successfully!")
             return upper_range, lower_range
@@ -88,80 +90,10 @@ class Shadow:
             return None
 
     async def withdraw(self, update, withdraw_page, pool_link):
-        print("======================== withdraw_page ================== ", withdraw_page)
-        print("======================== pool_link ================== ", pool_link)
-        # Try to automatically progress through Decrease/Withdraw UI steps
-        # 1) Click Decrease/Remove Liquidity action
-        decrease_candidates = [
-            withdraw_page.get_by_role("button", name="Decrease Liquidity"),
-            withdraw_page.get_by_role("button", name="Decrease"),
-            withdraw_page.get_by_role("button", name="Remove Liquidity"),
-            withdraw_page.get_by_text("Decrease Liquidity", exact=False),
-            withdraw_page.get_by_text("Remove Liquidity", exact=False),
-        ]
-
-        clicked_decrease = False
-        for btn in decrease_candidates:
-            try:
-                if await btn.is_visible():
-                    await btn.scroll_into_view_if_needed()
-                    await btn.click(timeout=15000)
-                    clicked_decrease = True
-                    break
-            except Exception:
-                continue
-        if not clicked_decrease:
-            # As a last resort, dump available buttons to logs to help debugging
-            try:
-                print("Withdraw page buttons (before decrease):", await withdraw_page.get_by_role("button").all_text_contents())
-            except Exception:
-                pass
-            raise RuntimeError("Could not find Decrease/Remove Liquidity button")
-
-        # 2) Select percentage if present (prefer 100%)
-        try:
-            percent_btn = withdraw_page.get_by_role("button", name="100%")
-            if await percent_btn.is_visible():
-                await percent_btn.click(timeout=120000)
-        except Exception:
-            # If specific percentage control isn't visible, continue without failing
-            pass
-
-        # 3) Click Withdraw/Remove confirmation button
-        withdraw_candidates = [
-            withdraw_page.get_by_role("button", name="Withdraw"),
-            withdraw_page.get_by_role("button", name="Remove"),
-            withdraw_page.get_by_text("Withdraw", exact=False),
-            withdraw_page.get_by_text("Remove", exact=False),
-        ]
-
-        clicked_withdraw = False
-        for btn in withdraw_candidates:
-            try:
-                if await btn.is_visible():
-                    await btn.scroll_into_view_if_needed()
-                    await btn.click(timeout=15000)
-                    clicked_withdraw = True
-                    break
-            except Exception:
-                continue
-        if not clicked_withdraw:
-            try:
-                print("Withdraw page buttons (before confirm):", await withdraw_page.get_by_role("button").all_text_contents())
-            except Exception:
-                pass
-            raise RuntimeError("Could not find final Withdraw/Remove button")
-
-        # 4) Optional site-level confirmation (not MetaMask). Best-effort.
-        try:
-            for name in ["Confirm Withdraw", "Confirm", "Approve"]:
-                btn = withdraw_page.get_by_role("button", name=name)
-                if await btn.is_visible():
-                    await btn.click(timeout=120000)
-                    break
-        except Exception:
-            pass
-        # MetaMask confirmations are handled by the background watcher started in launch_browser
+        await withdraw_page.get_by_role("button", name="Decrease Liquidity").click()
+        await withdraw_page.get_by_role("button", name="100%").click()
+        await withdraw_page.get_by_role("button", name="Withdraw").click()
+        #if confirm ...
         
         # Remove pool from JSON state after withdrawal
         try:

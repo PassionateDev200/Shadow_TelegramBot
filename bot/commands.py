@@ -411,78 +411,6 @@ class Bot:
             except Exception:
                 await update.message.reply_text("Invalid value. Provide a number 0-100.")
 
-    async def withdraw_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if update.message:
-            if not self._is_authorized(update):
-                await update.message.reply_text("Unauthorized.")
-                return
-            
-            # Check if MetaMask credentials are available before proceeding
-            if not self._has_stored_credentials():
-                await update.message.reply_text("❌ MetaMask credentials not found. Please use /connect first with your password and 12-word seed phrase.\nUsage: /connect [password] [word1] [word2] ... [word12]")
-                return
-            
-            args = context.args
-            if not args or len(args) < 2:
-                await update.message.reply_text(
-                    "❌ Invalid command format.\n\n"
-                    "Usage: /withdraw [pool_link] [percentage]\n"
-                    "Example: /withdraw https://www.shadow.so/liquidity/0x123... 100\n"
-                    "Percentage: 1-100 (100 = withdraw all liquidity)"
-                )
-                return
-            
-            pool_link, percentage = args[0], args[1]
-            
-            # Validate pool link
-            if not pool_link.startswith(config.SHADOW_BASE_URL):
-                await update.message.reply_text("❌ Please provide a valid Shadow pool link.")
-                return
-            
-            # Validate percentage
-            try:
-                percentage_val = float(percentage)
-                if percentage_val < 1 or percentage_val > 100:
-                    raise ValueError("out of range")
-            except ValueError:
-                await update.message.reply_text("❌ Invalid percentage. Please provide a number between 1-100.")
-                return
-            
-            # Check if pool exists in monitored pools
-            pool_exists = any(p.link == pool_link for p in self.pools)
-            if not pool_exists:
-                await update.message.reply_text("❌ Pool not found in monitored pools. Use /list to see monitored pools.")
-                return
-            
-            await update.message.reply_text("Starting withdrawal process...")
-            
-            try:
-                # Ensure browser exists
-                if self.browser is None:
-                    # Load stored credentials before launching browser
-                    self._load_stored_credentials()
-                    self.browser = await launch_browser()
-                    print("============================withdraw-pool=================  self.browser is None: ==============")
-                    await metamask_connect(self.browser)
-                    await shadow_connect(self.browser)
-                # Import withdraw service
-                from services.withdraw_pool import withdraw_pool
-                # Perform withdrawal
-                success = await withdraw_pool(update, self.browser, pool_link, percentage_val)
-                print("=============Success =========>", success);
-                if success:
-                    # Remove pool from monitoring after successful withdrawal
-                    self.pools = [p for p in self.pools if p.link != pool_link]
-                    save_state(self.pools, self.settings)
-                    await update.message.reply_text(f"✅ Successfully withdrew {percentage_val}% of liquidity from pool and removed from monitoring.")
-                else:
-                    await update.message.reply_text("❌ Failed to withdraw from pool.")
-                    
-            except Exception as e:
-                logging.exception("/withdraw failed")
-                await update.message.reply_text(f"❌ Error during withdrawal: {e}")
-                await notify_admins(context, f"/withdraw error from {update.effective_user.id}: {e}")
-
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message:
             if not self._is_authorized(update):
@@ -492,7 +420,6 @@ class Bot:
 ○ /disconnect — Disconnect browser and clear all data including stored credentials
 ○ /add [pool_link] [range_type] [token] [amount] — Add a pool link to monitor
 ○ /remove [link] — Remove a pool link
-○ /withdraw [pool_link] [percentage] — Withdraw liquidity from a pool (1-100%)
 ○ /list — List all monitored pools and global settings
 ○ /status — Force status check and update
 ○ /set_threshold [value] — Set global rebalance trigger threshold (default: 90%)
