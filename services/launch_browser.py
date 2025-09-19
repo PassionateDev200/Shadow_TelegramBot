@@ -46,12 +46,19 @@ async def launch_browser():
             color_scheme=config.COLOR_SCHEME,
         )
 
-        # Open a blank page just to get a page object
+    # Open a blank page just to get a page object
     page = await browser.new_page()
     await browser.pages[0].close()
-    await page.goto("https://www.google.com")
+    
+    # Navigate to a simple page and wait for it to load
+    try:
+        await page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=30000)
+    except Exception as e:
+        print(f"Warning: Failed to load Google, continuing anyway: {e}")
+        # Continue anyway - the browser is still usable
 
-    await asyncio.sleep(1)
+    # Give the browser and extensions more time to initialize
+    await asyncio.sleep(3)
     
     service_worker = browser.service_workers[0]
     extension_id = service_worker.url.split("/")[2]

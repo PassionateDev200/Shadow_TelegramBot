@@ -7,6 +7,7 @@ from services.launch_browser import launch_browser
 from services.metamask_connect import metamask_connect
 from services.shadow_connect import shadow_connect
 from services.add_pool import add_pool
+from services.shadow_dashboard import fetch_dashboard_pools, check_pool_status
 from config import config
 from utils.notifier import notify_admins
 from models.pool import Pool
@@ -116,10 +117,23 @@ class Bot:
             
             if self.browser is None:
                 await update.message.reply_text("Connecting to Browser...")
-                self.browser = await launch_browser()
-                await metamask_connect(self.browser)
-                await shadow_connect(self.browser)
-                await update.message.reply_text("Browser is connected.")
+                try:
+                    self.browser = await launch_browser()
+                    await update.message.reply_text("Browser launched, connecting to MetaMask...")
+                    await metamask_connect(self.browser)
+                    await update.message.reply_text("MetaMask connected, connecting to Shadow.so...")
+                    await shadow_connect(self.browser)
+                    await update.message.reply_text("✅ Browser is connected successfully.")
+                except Exception as e:
+                    await update.message.reply_text(f"❌ Connection failed: {str(e)[:100]}...")
+                    # Clean up if connection failed
+                    if self.browser:
+                        try:
+                            await self.browser.close()
+                        except:
+                            pass
+                        self.browser = None
+                    raise
             else:
                 await update.message.reply_text("Browser is already connected.")
 
@@ -262,12 +276,10 @@ class Bot:
             if not self._is_authorized(update):
                 await update.message.reply_text("Unauthorized.")
                 return
-            
             # Check if MetaMask credentials are available before proceeding
             if not self._has_stored_credentials():
-                await update.message.reply_text("❌ MetaMask credentials not found. Please use /connect first with your password and 12-word seed phrase.\nUsage: /connect [password] [word1] [word2] ... [word12]")
+                await update.message.reply_text(":x: MetaMask credentials not found. Please use /connect first with your password and 12-word seed phrase.\nUsage: /connect [password] [word1] [word2] ... [word12]")
                 return
-                
             await update.message.reply_text("Starting add flow…")
             args = context.args
             if self.browser is None:
@@ -290,13 +302,14 @@ class Bot:
                             owner_chat_id=update.effective_chat.id if update.effective_chat else None,
                         )
                         self.pools.append(pool)
+                        # Persist only if pools exist, preserve current settings
                         save_state(self.pools, self.settings)
-                        await update.message.reply_text("✅ Pool added and being monitored.")
+                        await update.message.reply_text(":white_check_mark: Pool added and being monitored.")
                     else:
-                        await update.message.reply_text("❌ Failed to add pool.")
+                        await update.message.reply_text(":x: Failed to add pool.")
                 except Exception as e:
                     logging.exception("/add failed")
-                    await update.message.reply_text(f"❌ Error: {e}")
+                    await update.message.reply_text(f":x: Error: {e}")
                     await notify_admins(context, f"/add error from {update.effective_user.id}: {e}")
             else:
                 await update.message.reply_text("Give Pool Link")
@@ -325,28 +338,86 @@ class Bot:
             if not self._is_authorized(update):
                 await update.message.reply_text("Unauthorized.")
                 return
-            if not self.pools:
-                await update.message.reply_text("No pools are being monitored.")
+            
+            # Check if MetaMask credentials are available before proceeding
+            if not self._has_stored_credentials():
+                await update.message.reply_text("❌ MetaMask credentials not found. Please use /connect first with your password and 12-word seed phrase.\nUsage: /connect [password] [word1] [word2] ... [word12]")
                 return
-            lines = [
-                "Monitored pools:",
-                f"📊 Global Settings: Threshold={self.settings['threshold']}% | Tolerance={self.settings['balance_tolerance']}%",
-                ""
-            ]
-            for i, p in enumerate(self.pools, 1):
-                range_info = f"range={p.range}"
-                if p.upper_range is not None and p.lower_range is not None:
-                    range_info += f" (${p.lower_range:.4f}-${p.upper_range:.4f})"
-                lines.append(f"{i}. {p.link} | {range_info} | token={p.token} | amount={p.amount} | status={p.last_status or '-'}")
-            await update.message.reply_text("\n".join(lines))
+            
+            # Ensure browser exists
+            if self.browser is None:
+                await update.message.reply_text("Connecting to browser to fetch pool data...")
+                # Load stored credentials before launching browser
+                self._load_stored_credentials()
+                self.browser = await launch_browser()
+                await metamask_connect(self.browser)
+                await shadow_connect(self.browser)
+            
+            await update.message.reply_text("Fetching pool information from Shadow.so dashboard...")
+            
+            try:
+                # Fetch pool data from Shadow.so dashboard
+                dashboard_pools = await fetch_dashboard_pools(self.browser)
+                
+                if not dashboard_pools:
+                    await update.message.reply_text("No pools found in your Shadow.so dashboard.")
+                    return
+                
+                lines = [
+                    "Your Shadow.so Pools:",
+                    f"Global Settings: Threshold={self.settings['threshold']}% | Tolerance={self.settings['balance_tolerance']}%",
+                    ""
+                ]
+                
+                for i, pool in enumerate(dashboard_pools, 1):
+                    lines.append(f"Pool #{i}:")
+                    lines.append(f"📋 Pool ID: {pool['pool_id']}")
+                    lines.append(f"📝 Contract Address: {pool['contract_address']}")
+                    lines.append(f"🔗 Pool Link: {pool['pool_link']}")
+                    
+                    if pool['tokens']:
+                        lines.append(f"💱 Tokens: {pool['tokens']}")
+                    if pool['liquidity']:
+                        lines.append(f"💰 Liquidity: {pool['liquidity']}")
+                    if pool['range']:
+                        lines.append(f"📊 Range: {pool['range']}")
+                    if pool['status']:
+                        lines.append(f"📈 Status: {pool['status']}")
+                    
+                    lines.append("=" * 50)
+                
+                # Split message if too long (Telegram has a 4096 character limit)
+                message_text = "\n".join(lines)
+                if len(message_text) > 4000:
+                    # Split into multiple messages
+                    current_message = lines[0:3]  # Header
+                    current_length = len("\n".join(current_message))
+                    
+                    for line in lines[3:]:
+                        if current_length + len(line) + 1 > 4000:
+                            await update.message.reply_text("\n".join(current_message))
+                            current_message = [line]
+                            current_length = len(line)
+                        else:
+                            current_message.append(line)
+                            current_length += len(line) + 1
+                    
+                    if current_message:
+                        await update.message.reply_text("\n".join(current_message))
+                else:
+                    await update.message.reply_text(message_text)
+                    
+            except Exception as e:
+                logging.exception("Error fetching dashboard pools")
+                await update.message.reply_text(f"❌ Error fetching pool data: {e}")
+                
+                # NO FAKE FALLBACK DATA - Only show real Shadow.so data
+                await update.message.reply_text("❌ Cannot fetch real pool data from Shadow.so dashboard. Please try again later.")
 
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message:
             if not self._is_authorized(update):
                 await update.message.reply_text("Unauthorized.")
-                return
-            if not self.pools:
-                await update.message.reply_text("No pools are being monitored.")
                 return
             
             # Check if MetaMask credentials are available before proceeding
@@ -360,14 +431,35 @@ class Bot:
                 self._load_stored_credentials()
                 self.browser = await launch_browser()
                 await metamask_connect(self.browser)
+                await shadow_connect(self.browser)
+            
             await update.message.reply_text("Checking status…")
-            # Check first pool (or all?) – we'll check all and summarize
-            results = []
-            for p in self.pools:
-                status = await check_status(self.browser, p)
-                p.last_status = status
-                results.append(f"{p.link} -> {status}")
-            await update.message.reply_text("\n".join(results))
+            
+            try:
+                # Fetch pool data from Shadow.so dashboard
+                dashboard_pools = await fetch_dashboard_pools(self.browser)
+                
+                if not dashboard_pools:
+                    await update.message.reply_text("No pools found in your Shadow.so dashboard.")
+                    return
+                
+                # Check status for each pool in original simple format, but add Pool ID
+                results = []
+                for pool in dashboard_pools:
+                    try:
+                        status = await check_status_with_pool_id(self.browser, pool)
+                        results.append(f"Pool ID: {pool['pool_id']} | {pool['pool_link']} -> {status}")
+                    except Exception as e:
+                        results.append(f"Pool ID: {pool['pool_id']} | {pool['pool_link']} -> error: {str(e)[:30]}...")
+                
+                await update.message.reply_text("\n".join(results))
+                    
+            except Exception as e:
+                logging.exception("Error fetching dashboard pool status")
+                await update.message.reply_text(f"❌ Error fetching pool status: {e}")
+                
+                # NO FAKE FALLBACK DATA - Only show real Shadow.so data
+                await update.message.reply_text("❌ Cannot fetch real pool status from Shadow.so dashboard. Please try again later.")
 
     async def set_threshold_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message:
@@ -420,8 +512,8 @@ class Bot:
 ○ /disconnect — Disconnect browser and clear all data including stored credentials
 ○ /add [pool_link] [range_type] [token] [amount] — Add a pool link to monitor
 ○ /remove [link] — Remove a pool link
-○ /list — List all monitored pools and global settings
-○ /status — Force status check and update
+○ /list — Fetch and display all pools from Shadow.so dashboard with Pool IDs and contract addresses
+○ /status — Force status check and update (now includes Pool IDs from Shadow.so dashboard)
 ○ /set_threshold [value] — Set global rebalance trigger threshold (default: 90%)
 ○ /set_balance_tolerance [value] — Set global balance tolerance (default: 2%)
 ○ /help — List available commands
@@ -503,6 +595,25 @@ async def check_status(browser, pool: Pool) -> str:
     try:
         # If we have last_status, surface it; otherwise provide a generic one
         return pool.last_status or "monitoring"
+    except Exception:
+        return "unknown"
+
+async def check_status_with_pool_id(browser, pool_data: dict) -> str:
+    """Check status for a pool from dashboard data.
+    
+    Returns a simple status string in the original style.
+    """
+    try:
+        # Try to get basic status information
+        if pool_data.get('status'):
+            return pool_data['status'].lower()
+        
+        # If we have the pool link, we could potentially check more detailed status
+        # but for now, return a simple status based on available data
+        if pool_data.get('liquidity') and '$' in pool_data['liquidity']:
+            return "active"
+        
+        return "monitoring"
     except Exception:
         return "unknown"
 

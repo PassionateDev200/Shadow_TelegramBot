@@ -23,7 +23,18 @@ async def metamask_connect(browser):
         await metamask.goto(url)
 
     metamask_func = MetamaskFunc(metamask)
-    await metamask.wait_for_load_state("networkidle")
+    
+    # Wait for MetaMask to load with increased timeout and better error handling
+    try:
+        await metamask.wait_for_load_state("networkidle", timeout=60000)  # Increase to 60 seconds
+    except Exception as e:
+        logging.warning(f"MetaMask networkidle timeout, trying domcontentloaded: {e}")
+        try:
+            await metamask.wait_for_load_state("domcontentloaded", timeout=30000)  # Fallback to 30 seconds
+        except Exception as e2:
+            logging.warning(f"MetaMask domcontentloaded also failed, continuing anyway: {e2}")
+            # Continue anyway - sometimes MetaMask works even if load state detection fails
+            await asyncio.sleep(3)  # Give it a bit more time
 
     btn = metamask.get_by_role('button', name='GET STARTED')
     for _ in range(3):
