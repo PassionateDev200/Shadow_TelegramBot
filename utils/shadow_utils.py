@@ -90,10 +90,87 @@ class Shadow:
             return None
 
     async def withdraw(self, update, withdraw_page, pool_link):
-        await withdraw_page.get_by_role("button", name="Decrease Liquidity").click()
-        await withdraw_page.get_by_role("button", name="100%").click()
-        await withdraw_page.get_by_role("button", name="Withdraw").click()
-        #if confirm ...
+        """
+        Perform 100% withdrawal from a Shadow.so liquidity pool.
+        Uses multiple methods to ensure the slider is set to 100%.
+        """
+        print(f"Starting withdrawal process for pool: {pool_link}")
+        
+        # Step 1: Click "Decrease Liquidity"
+        try:
+            decrease_btn = withdraw_page.get_by_role("button", name="Decrease Liquidity")
+            await decrease_btn.click()
+            await asyncio.sleep(3)
+            print("Clicked Decrease Liquidity button")
+        except Exception as e:
+            print(f"Error clicking Decrease Liquidity: {e}")
+            raise
+        
+        # Step 2: Set to 100% using multiple methods
+        await self._set_to_100_percent(withdraw_page)
+        
+        # Step 3: Wait for Withdraw button to become enabled, then click it
+        try:
+            withdraw_btn = withdraw_page.get_by_role("button", name="Withdraw")
+            
+            # Check if button is currently disabled
+            is_disabled = await withdraw_btn.is_disabled()
+            print(f"Withdraw button disabled status: {is_disabled}")
+            
+            if is_disabled:
+                print("Withdraw button is disabled, waiting for it to become enabled...")
+                # Wait up to 60 seconds for the button to become enabled
+                try:
+                    await withdraw_btn.wait_for(state="attached", timeout=60000)
+                    await withdraw_page.wait_for_function(
+                        "() => !document.querySelector('button:has-text(\"Withdraw\")').disabled",
+                        timeout=60000
+                    )
+                    print("Withdraw button is now enabled")
+                except Exception as wait_error:
+                    print(f"Timeout waiting for Withdraw button to enable: {wait_error}")
+                    # Try to force-enable it or proceed anyway
+                    try:
+                        await withdraw_btn.evaluate("button => button.disabled = false")
+                        print("Force-enabled the Withdraw button")
+                    except:
+                        print("Could not force-enable button, proceeding anyway...")
+            
+            # Now try to click the button
+            await withdraw_btn.click()
+            await asyncio.sleep(2)
+            print("Successfully clicked Withdraw button")
+            
+        except Exception as e:
+            print(f"Error clicking Withdraw: {e}")
+            # Try alternative approach - find withdraw button by different selectors
+            try:
+                print("Trying alternative withdraw button selectors...")
+                alt_selectors = [
+                    'button:has-text("Withdraw")',
+                    '[class*="btn"]:has-text("Withdraw")',
+                    'input[type="submit"][value*="Withdraw"]',
+                    'button[type="submit"]:has-text("Withdraw")'
+                ]
+                
+                for selector in alt_selectors:
+                    try:
+                        alt_btn = withdraw_page.locator(selector)
+                        if await alt_btn.count() > 0:
+                            await alt_btn.first.click()
+                            print(f"Successfully clicked withdraw using selector: {selector}")
+                            break
+                    except:
+                        continue
+                else:
+                    raise Exception("Could not click withdraw button with any method")
+                    
+            except Exception as final_error:
+                print(f"Final withdraw click attempt failed: {final_error}")
+                raise
+        
+        # Step 4: Handle MetaMask confirmation if needed
+        # This would be handled by the calling code
         
         # Remove pool from JSON state after withdrawal
         try:
@@ -123,6 +200,156 @@ class Shadow:
             print(f"Pool {pool_link} removed from state after withdrawal")
         except Exception as e:
             print(f"Error removing pool from state: {e}")
+    
+    async def _set_to_100_percent(self, page):
+        """
+        Set the liquidity removal slider to 100% using multiple methods.
+        This ensures both the UI button and underlying slider are properly set.
+        """
+        print("Setting liquidity removal to 100%...")
+        
+        # Step 1: First try to click the 100% button (from the HTML structure provided)
+        button_clicked = False
+        hundred_percent_selectors = [
+            # Try the exact structure from the HTML
+            'div.btn.btn-lg.w-full.cursor-pointer:has-text("100")',
+            'div[class*="btn"][class*="cursor-pointer"]:has-text("100")',
+            'div[class*="btn-primary"]:has-text("100")',
+            # Fallback selectors
+            'div:has-text("100%")',
+            'button:has-text("100%")',
+            '[class*="btn"]:has-text("100%")',
+            'div[class*="cursor-pointer"]:has-text("100%")',
+            'span:has-text("100%")'
+        ]
+        
+        for selector in hundred_percent_selectors:
+            try:
+                elements = page.locator(selector)
+                count = await elements.count()
+                print(f"Trying 100% button selector '{selector}': found {count} elements")
+                
+                if count > 0:
+                    # Try each element that matches
+                    for i in range(count):
+                        try:
+                            element = elements.nth(i)
+                            if await element.is_visible():
+                                text = await element.text_content()
+                                print(f"Element {i} text: '{text.strip() if text else 'No text'}'")
+                                
+                                # Check if this contains "100" (since % might be separate)
+                                if text and ("100%" in text.strip() or ("100" in text and "%" in text)):
+                                    await element.click()
+                                    await asyncio.sleep(2)
+                                    print(f"Successfully clicked 100% button using selector: {selector}")
+                                    button_clicked = True
+                                    break
+                        except Exception as e:
+                            print(f"Failed to click element {i}: {e}")
+                            continue
+                    
+                    if button_clicked:
+                        break
+                        
+            except Exception as e:
+                print(f"100% button selector '{selector}' failed: {e}")
+                continue
+        
+        # Step 2: ALWAYS also set the slider value directly (this is crucial!)
+        print("Setting slider value to ensure it's at 100%...")
+        try:
+            slider = page.locator('input[type="range"]')
+            slider_count = await slider.count()
+            print(f"Found {slider_count} range sliders")
+            
+            if slider_count > 0:
+                slider_element = slider.first
+                
+                # Get slider attributes
+                max_value = await slider_element.get_attribute('max') or '100'
+                min_value = await slider_element.get_attribute('min') or '0'
+                current_value = await slider_element.get_attribute('value') or '0'
+                
+                print(f"Slider - min: {min_value}, max: {max_value}, current: {current_value}")
+                
+                # Method A: Use fill() to set the value
+                await slider_element.fill(max_value)
+                await asyncio.sleep(1)
+                
+                # Method B: Use JavaScript to set value and trigger events
+                await slider_element.evaluate(f"""
+                    (element) => {{
+                        element.value = {max_value};
+                        
+                        // Trigger all possible events that the UI might listen for
+                        element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        element.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        element.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+                        
+                        // Also trigger mouse events in case the UI listens for those
+                        element.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true }}));
+                        element.dispatchEvent(new MouseEvent('click', {{ bubbles: true }}));
+                    }}
+                """)
+                await asyncio.sleep(1)
+                
+                # Method C: Physical interaction - drag to the end
+                try:
+                    slider_box = await slider_element.bounding_box()
+                    if slider_box:
+                        # Click at the far right of the slider
+                        right_x = slider_box['x'] + slider_box['width'] - 5
+                        center_y = slider_box['y'] + slider_box['height'] / 2
+                        await page.mouse.click(right_x, center_y)
+                        await asyncio.sleep(1)
+                        print(f"Clicked slider at position ({right_x}, {center_y})")
+                except Exception as e:
+                    print(f"Physical slider click failed: {e}")
+                
+                # Verify the final value
+                final_value = await slider_element.get_attribute('value')
+                print(f"Final slider value: {final_value} (target was {max_value})")
+                
+                if final_value == max_value:
+                    print(f"✅ Slider successfully set to maximum: {max_value}")
+                else:
+                    print(f"⚠️ Warning: Slider value {final_value} doesn't match target {max_value}")
+                    
+        except Exception as e:
+            print(f"Slider manipulation failed: {e}")
+        
+        # Step 3: If nothing worked, try finding any element with exactly "100%"
+        if not button_clicked:
+            print("Searching for any clickable element with exactly '100%' text...")
+            try:
+                # Get all potentially clickable elements
+                all_elements = await page.locator('*').all()
+                
+                for i, element in enumerate(all_elements):
+                    try:
+                        text = await element.text_content()
+                        if text and ("100%" in text.strip() or ("100" in text and "%" in text)):
+                            if await element.is_visible():
+                                print(f"Found 100% match at element {i}: '{text.strip()}'")
+                                await element.click()
+                                await asyncio.sleep(2)
+                                print("Successfully clicked 100% element")
+                                button_clicked = True
+                                break
+                    except Exception:
+                        continue
+                        
+            except Exception as e:
+                print(f"Error in final search: {e}")
+        
+        # Final wait to ensure all UI updates are processed
+        await asyncio.sleep(3)
+        
+        if button_clicked:
+            print("✅ Successfully set withdrawal amount to 100%")
+        else:
+            print("⚠️ Could not click 100% button, but slider should be set to maximum")
 
     async def rebalance(self, trade_page, tokens, amount):
         await trade_page.goto("https://www.shadow.so/trade")

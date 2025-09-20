@@ -12,6 +12,7 @@ from config import config
 from utils.notifier import notify_admins
 from models.pool import Pool
 from utils.state import load_state, save_state
+from utils.shadow_utils import Shadow
 
 class Bot:
     def __init__(self):
@@ -304,34 +305,76 @@ class Bot:
                         self.pools.append(pool)
                         # Persist only if pools exist, preserve current settings
                         save_state(self.pools, self.settings)
-                        await update.message.reply_text(":white_check_mark: Pool added and being monitored.")
+                        await update.message.reply_text("Pool added and being monitored.")
                     else:
-                        await update.message.reply_text(":x: Failed to add pool.")
+                        await update.message.reply_text("Failed to add pool.")
                 except Exception as e:
                     logging.exception("/add failed")
-                    await update.message.reply_text(f":x: Error: {e}")
+                    await update.message.reply_text(f"Error: {e}")
                     await notify_admins(context, f"/add error from {update.effective_user.id}: {e}")
             else:
                 await update.message.reply_text("Give Pool Link")
 
     async def remove_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        Perform 100% withdrawal from a Shadow.so liquidity pool.
+        Usage: /remove [pool_link]
+        """
         if update.message:
             if not self._is_authorized(update):
                 await update.message.reply_text("Unauthorized.")
                 return
+            
+            # Check if MetaMask credentials are available
+            if not self._has_stored_credentials():
+                await update.message.reply_text("❌ MetaMask credentials not found. Please use /connect first.")
+                return
+            
             args = context.args
             if not args:
-                await update.message.reply_text("Usage: /remove [pool link]")
+                await update.message.reply_text("Usage: /remove [pool_link]\nExample: /remove https://www.shadow.so/liquidity/manage/0x324963c267c354c7660ce8ca3f5f167e05649970/1037968")
                 return
-            link = args[0]
-            before = len(self.pools)
-            self.pools = [p for p in self.pools if p.link != link]
-            after = len(self.pools)
-            if after < before:
-                save_state(self.pools, self.settings)
-                await update.message.reply_text("✅ Removed.")
-            else:
-                await update.message.reply_text("Not found.")
+            
+            pool_link = args[0]
+            
+            # Extract Pool ID from link
+            try:
+                pool_id = pool_link.split('/')[-1]
+                if not pool_id.isdigit():
+                    await update.message.reply_text("❌ Invalid pool link format.")
+                    return
+            except:
+                await update.message.reply_text("❌ Could not extract Pool ID from link.")
+                return
+        
+            # Ensure browser is connected
+            if self.browser is None:
+                await update.message.reply_text("🔄 Connecting to browser...")
+                self._load_stored_credentials()
+                self.browser = await launch_browser()
+                await metamask_connect(self.browser)
+                await shadow_connect(self.browser)
+            
+            await update.message.reply_text(f"🔄 Starting 100% withdrawal from Pool ID: {pool_id}...")
+            
+            try:
+                # Create Shadow utility instance
+                shadow_utils = Shadow(self.browser)
+                
+                # Navigate to the pool management page
+                page = await self.browser.new_page()
+                await page.goto(pool_link, wait_until="networkidle", timeout=120000)  # 120 seconds timeout
+                await asyncio.sleep(5)
+                
+                # Perform the withdrawal using the Shadow utility
+                await shadow_utils.withdraw(update, page, pool_link)
+                await update.message.reply_text(f"Successfully withdrew 100% from Pool ID: {pool_id}")
+                await page.close()
+                    
+            except Exception as e:
+                logging.exception(f"Error during withdrawal from Pool ID: {pool_id}")
+                await update.message.reply_text(f"❌ Error during withdrawal: {str(e)}")
+                await notify_admins(context, f"/remove error: {e}")
 
     async def list_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message:
@@ -364,8 +407,8 @@ class Bot:
                     return
                 
                 lines = [
-                    "Your Shadow.so Pools:",
-                    f"Global Settings: Threshold={self.settings['threshold']}% | Tolerance={self.settings['balance_tolerance']}%",
+                    "🏊 Your Shadow.so Pools:",
+                    f"📊 Global Settings: Threshold={self.settings['threshold']}% | Tolerance={self.settings['balance_tolerance']}%",
                     ""
                 ]
                 

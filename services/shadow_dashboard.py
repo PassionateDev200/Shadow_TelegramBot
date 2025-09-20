@@ -11,7 +11,7 @@ async def fetch_dashboard_pools(browser) -> List[Dict]:
     try:
         # Navigate to the dashboard
         dashboard_page = await browser.new_page()
-        await dashboard_page.goto("https://www.shadow.so/dashboard", wait_until="networkidle")
+        await dashboard_page.goto("https://www.shadow.so/dashboard", wait_until="networkidle", timeout=60000)
         
         # Wait for the page to load completely
         await asyncio.sleep(5)
