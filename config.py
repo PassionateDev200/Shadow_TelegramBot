@@ -46,7 +46,13 @@ class Config:
     POLL_INTERVAL = int(os.getenv('POLL_INTERVAL', '1'))
     REBALANCE_THRESHOLD = float(os.getenv('REBALANCE_THRESHOLD', '90'))
     BALANCE_TOLERANCE = float(os.getenv('BALANCE_TOLERANCE', '2'))
-    MONITOR_INTERVAL = int(os.getenv('MONITOR_INTERVAL', '30'))
+    MONITOR_INTERVAL = int(os.getenv('MONITOR_INTERVAL', '60'))  # Reduced from 30 to 60 seconds for better responsiveness
+
+    # Error Recovery Settings
+    MAX_BROWSER_RETRIES = int(os.getenv('MAX_BROWSER_RETRIES', '3'))
+    BROWSER_RESTART_DELAY = int(os.getenv('BROWSER_RESTART_DELAY', '30'))  # seconds
+    TRANSACTION_TIMEOUT = int(os.getenv('TRANSACTION_TIMEOUT', '120'))  # seconds
+    MAX_REBALANCE_RETRIES = int(os.getenv('MAX_REBALANCE_RETRIES', '2'))
 
     # Security & Notifications
     # Comma-separated list of Telegram user IDs allowed to use the bot. If empty, allow all.
@@ -124,8 +130,12 @@ class Config:
         print(f"Monitor Interval: {cls.MONITOR_INTERVAL}s")
         print(f"Rebalance Threshold: {cls.REBALANCE_THRESHOLD}%")
         print(f"Balance Tolerance: {cls.BALANCE_TOLERANCE}%")
+        print(f"Transaction Timeout: {cls.TRANSACTION_TIMEOUT}s")
+        print(f"Max Browser Retries: {cls.MAX_BROWSER_RETRIES}")
+        print(f"Max Rebalance Retries: {cls.MAX_REBALANCE_RETRIES}")
         print(f"Allowed Users: {cls.ALLOWED_USER_IDS if cls.ALLOWED_USER_IDS else 'ALL'}")
         print(f"Admin Chat IDs: {cls.ADMIN_CHAT_IDS}")
+        print(f"Notifications: {'Enabled' if cls.ENABLE_NOTIFICATIONS else 'Disabled'}")
         print(f"Log Dir: {cls.LOG_DIR}")
         print("====================")
 

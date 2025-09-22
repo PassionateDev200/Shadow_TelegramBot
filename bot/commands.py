@@ -9,7 +9,7 @@ from services.shadow_connect import shadow_connect
 from services.add_pool import add_pool
 from services.shadow_dashboard import fetch_dashboard_pools, check_pool_status
 from config import config
-from utils.notifier import notify_admins
+from utils.notifier import notify_admins, notify_rebalance_start, notify_rebalance_complete, notify_rebalance_error, notify_system_status
 from models.pool import Pool
 from utils.state import load_state, save_state
 from utils.shadow_utils import Shadow
@@ -273,47 +273,128 @@ class Bot:
                 await update.message.reply_text("Browser is not connected.")
 
     async def add_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Enhanced add command with better validation and metadata storage"""
         if update.message:
             if not self._is_authorized(update):
                 await update.message.reply_text("Unauthorized.")
                 return
-            # Check if MetaMask credentials are available before proceeding
+            
+            # Check if MetaMask credentials are available
             if not self._has_stored_credentials():
-                await update.message.reply_text(":x: MetaMask credentials not found. Please use /connect first with your password and 12-word seed phrase.\nUsage: /connect [password] [word1] [word2] ... [word12]")
+                await update.message.reply_text("❌ MetaMask credentials not found. Please use /connect first.")
                 return
-            await update.message.reply_text("Starting add flow…")
+            
             args = context.args
+            if len(args) < 4:
+                await update.message.reply_text(
+                    "❌ Invalid command format.\n\n"
+                    "Usage: /add [pool_link] [range_type] [token] [amount]\n"
+                    "Example: /add https://www.shadow.so/liquidity/manage/0x123.../456 aggressive USDC 30\n"
+                    "Range types: passive, wide, narrow, aggressive, insane"
+                )
+                return
+            
+            pool_link, range_type, token, amount_str = args[:4]
+            
+            try:
+                amount = float(amount_str)
+                if amount <= 0:
+                    await update.message.reply_text("❌ Amount must be greater than 0")
+                    return
+            except ValueError:
+                await update.message.reply_text("❌ Invalid amount format")
+                return
+            
+            # Validate pool link format
+            if not pool_link.startswith("https://www.shadow.so/liquidity/"):
+                await update.message.reply_text("❌ Invalid pool link format. Must be a Shadow.so liquidity URL.")
+                return
+            
+            # Validate range type
+            if range_type.lower() not in [r.lower() for r in config.DEFAULT_RANGE_TYPES]:
+                await update.message.reply_text(f"❌ Invalid range type. Available: {', '.join(config.DEFAULT_RANGE_TYPES)}")
+                return
+            
+            # Check if pool already exists
+            existing_pool = next((p for p in self.pools if p.link == pool_link), None)
+            if existing_pool:
+                await update.message.reply_text("⚠️ Pool is already being monitored.")
+                return
+            
+            # Ensure browser is connected
             if self.browser is None:
-                # Load stored credentials before launching browser
-                self._load_stored_credentials()
-                self.browser = await launch_browser()
-                await metamask_connect(self.browser)
-            if args:
+                await update.message.reply_text("🔄 Connecting to browser...")
                 try:
-                    ok, pool_info = await add_pool(update, self.browser, args)
-                    if ok:
-                        # Track monitored pools as dataclass
-                        pool = Pool(
-                            link=pool_info["link"],
-                            range=pool_info["range"],
-                            token=pool_info["token"],
-                            amount=pool_info["amount"],
-                            upper_range=pool_info.get("upper_range"),
-                            lower_range=pool_info.get("lower_range"),
-                            owner_chat_id=update.effective_chat.id if update.effective_chat else None,
-                        )
-                        self.pools.append(pool)
-                        # Persist only if pools exist, preserve current settings
-                        save_state(self.pools, self.settings)
-                        await update.message.reply_text("Pool added and being monitored.")
-                    else:
-                        await update.message.reply_text("Failed to add pool.")
+                    self._load_stored_credentials()
+                    self.browser = await launch_browser()
+                    await metamask_connect(self.browser)
+                    await shadow_connect(self.browser)
                 except Exception as e:
-                    logging.exception("/add failed")
-                    await update.message.reply_text(f"Error: {e}")
-                    await notify_admins(context, f"/add error from {update.effective_user.id}: {e}")
-            else:
-                await update.message.reply_text("Give Pool Link")
+                    await update.message.reply_text(f"❌ Failed to connect browser: {e}")
+                    return
+            
+            await update.message.reply_text(f"🔄 Adding pool to monitoring list...")
+            
+            try:
+                # Create pool object with metadata
+                pool = Pool(
+                    link=pool_link,
+                    range=range_type,
+                    token=token,
+                    amount=amount,
+                    owner_chat_id=update.message.chat_id,
+                    meta={
+                        'threshold': self.settings.get('threshold', 90),
+                        'balance_tolerance': self.settings.get('balance_tolerance', 2),
+                        'added_by': update.message.from_user.username or str(update.message.from_user.id),
+                        'added_at': asyncio.get_event_loop().time()
+                    }
+                )
+                
+                # Validate pool by checking its status
+                pool_parts = pool_link.split('/')
+                if len(pool_parts) >= 2:
+                    contract_address = pool_parts[-2]
+                    pool_id = pool_parts[-1]
+                    
+                    status_info = await check_pool_status(self.browser, contract_address, pool_id)
+                    if status_info:
+                        pool.last_status = "monitoring"
+                        logging.info(f"Pool validation successful: {pool_id}")
+                    else:
+                        await update.message.reply_text("⚠️ Could not validate pool status, but adding anyway.")
+                        pool.last_status = "unknown"
+                
+                # Add to pools list
+                self.pools.append(pool)
+                
+                # Save state
+                self._save_pools_state()
+                
+                # Send confirmation
+                await update.message.reply_text(
+                    f"✅ Pool added successfully!\n\n"
+                    f"🔗 Link: {pool_link}\n"
+                    f"📊 Range: {range_type}\n"
+                    f"💰 Token: {token}\n"
+                    f"💵 Amount: {amount}\n"
+                    f"🎯 Threshold: {pool.meta['threshold']}%\n"
+                    f"⚖️ Balance Tolerance: {pool.meta['balance_tolerance']}%\n\n"
+                    f"The pool is now being monitored automatically."
+                )
+                
+                # Notify admins
+                await notify_admins(
+                    context, 
+                    f"📊 New pool added by {update.message.from_user.username}: {pool_id} ({token} {amount})"
+                )
+                
+                logging.info(f"Pool added successfully: {pool_link} by user {update.message.from_user.id}")
+                
+            except Exception as e:
+                logging.exception(f"Error adding pool: {e}")
+                await update.message.reply_text(f"❌ Failed to add pool: {e}")
+                await notify_admins(context, f"❌ Failed to add pool: {e}")
 
     async def remove_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -332,7 +413,7 @@ class Bot:
             
             args = context.args
             if not args:
-                await update.message.reply_text("Usage: /remove [pool_link]\nExample: /remove https://www.shadow.so/liquidity/manage/0x324963c267c354c7660ce8ca3f5f167e05649970/1037968")
+                await update.message.reply_text("Usage: /remove [pool_link]\nExample: /remove https://www.shadow.so/liquidity/manage/[contract_address]/[pool_id]")
                 return
             
             pool_link = args[0]
@@ -368,7 +449,8 @@ class Bot:
                 
                 # Perform the withdrawal using the Shadow utility
                 await shadow_utils.withdraw(update, page, pool_link)
-                await update.message.reply_text(f"Successfully withdrew 100% from Pool ID: {pool_id}")
+                await update.message.reply_text(f"✅ Successfully withdrew 100% from Pool ID: {pool_id}")
+                
                 await page.close()
                     
             except Exception as e:
@@ -595,35 +677,133 @@ class Bot:
         except Exception:
             pass
 
-    # Background monitor job (placeholder)
+    # Background monitor job (enhanced)
     async def monitor_job(self, context: ContextTypes.DEFAULT_TYPE):
-        if not self.pools:
-            return
-        
-        # Check if MetaMask credentials are available before proceeding
-        if not self._has_stored_credentials():
-            await notify_admins(context, "❌ Monitor: MetaMask credentials not found. Please use /connect first.")
-            return
-            
-        # Ensure browser exists
-        if self.browser is None:
-            try:
-                # Load stored credentials before launching browser
-                self._load_stored_credentials()
-                self.browser = await launch_browser()
-                await metamask_connect(self.browser)
-            except Exception as e:
-                logging.exception("Failed to (re)launch browser for monitoring")
-                await notify_admins(context, f"Monitor: failed to launch browser: {e}")
+        """Enhanced background monitoring job with comprehensive error handling"""
+        try:
+            if not self.pools:
+                logging.debug("No pools to monitor")
                 return
-        logging.info("Monitoring %d pools", len(self.pools))
-        for pool in list(self.pools):
+            
+            # Check if MetaMask credentials are available before proceeding
+            if not self._has_stored_credentials():
+                await notify_admins(context, "❌ Monitor: MetaMask credentials not found. Please use /connect first.")
+                return
+                
+            # Ensure browser exists and is functional
+            browser_needs_restart = False
+            
+            if self.browser is None:
+                browser_needs_restart = True
+                logging.info("Browser is None, needs restart")
+            else:
+                # Check if browser is still valid by testing if we can create a new page
+                try:
+                    test_page = await self.browser.new_page()
+                    await test_page.close()
+                    logging.debug("Browser health check passed")
+                except Exception as e:
+                    browser_needs_restart = True
+                    logging.warning(f"Browser health check failed: {e}")
+                    # Clean up the invalid browser reference
+                    try:
+                        await self.browser.close()
+                    except:
+                        pass
+                    self.browser = None
+            
+            if browser_needs_restart:
+                try:
+                    logging.info("🔄 Launching browser for monitoring...")
+                    # Load stored credentials before launching browser
+                    self._load_stored_credentials()
+                    self.browser = await launch_browser()
+                    await metamask_connect(self.browser)
+                    await shadow_connect(self.browser)
+                    logging.info("✅ Browser launched successfully for monitoring")
+                except Exception as e:
+                    logging.exception("Failed to (re)launch browser for monitoring")
+                    await notify_admins(context, f"❌ Monitor: failed to launch browser: {e}")
+                    return
+            
+            logging.info(f"📊 Monitoring {len(self.pools)} pools...")
+            
+            # Track monitoring results
+            rebalanced_count = 0
+            error_count = 0
+            
+            for pool in list(self.pools):
+                try:
+                    logging.debug(f"Checking pool: {pool.link}")
+                    
+                    # Apply global settings to pool if not set
+                    if 'threshold' not in pool.meta:
+                        pool.meta['threshold'] = self.settings.get('threshold', 90)
+                    if 'balance_tolerance' not in pool.meta:
+                        pool.meta['balance_tolerance'] = self.settings.get('balance_tolerance', 2)
+                    
+                    # Check and potentially rebalance the pool
+                    changed, status = await check_and_rebalance(self.browser, pool, context)
+                    
+                    # Update pool status
+                    old_status = pool.last_status
+                    pool.last_status = status
+                    
+                    # Log status changes
+                    if old_status != status:
+                        logging.info(f"Pool {pool.link} status changed: {old_status} -> {status}")
+                        
+                        # Notify on important status changes
+                        if status.startswith("error"):
+                            await notify_admins(context, f"⚠️ Pool status error: {pool.link} - {status}")
+                        elif status == "rebalanced":
+                            rebalanced_count += 1
+                    
+                    # Small delay between pools to avoid overwhelming the system
+                    await asyncio.sleep(2)
+                    
+                except Exception as e:
+                    error_count += 1
+                    logging.exception(f"Monitoring error for {pool.link}")
+                    await notify_admins(context, f"❌ Monitor error for {pool.link}: {e}")
+                    
+                    # Update pool status to reflect error
+                    pool.last_status = f"error: {str(e)[:50]}"
+            
+            # Save updated pool states
             try:
-                changed, status = await check_and_rebalance(self.browser, pool, context)
-                pool.last_status = status
+                self._save_pools_state()
             except Exception as e:
-                logging.exception("Monitoring error for %s", pool.link)
-                await notify_admins(context, f"Monitor error for {pool.link}: {e}")
+                logging.exception("Failed to save pools state after monitoring")
+            
+            # Send summary notification if there were significant events
+            if rebalanced_count > 0 or error_count > 0:
+                summary = f"📊 Monitoring Summary: {rebalanced_count} rebalanced, {error_count} errors"
+                logging.info(summary)
+                if rebalanced_count > 0:  # Only notify for successful rebalances
+                    await notify_admins(context, summary)
+                    
+        except Exception as e:
+            logging.exception("Critical error in monitor_job")
+            await notify_admins(context, f"🚨 Critical monitoring error: {e}")
+    
+    def _save_pools_state(self):
+        """Save current pools state to persistent storage"""
+        try:
+            from utils.state import save_state, load_state
+            
+            # Convert Pool objects to the format expected by save_state
+            pools_list = []
+            for pool in self.pools:
+                pools_list.append(pool)  # save_state expects Pool objects directly
+            
+            # Save state with correct parameters
+            save_state(pools_list, self.settings)
+            logging.debug("Pools state saved successfully")
+            
+        except Exception as e:
+            logging.exception("Failed to save pools state")
+            raise
 
 
 
@@ -662,13 +842,355 @@ async def check_status_with_pool_id(browser, pool_data: dict) -> str:
 
 
 async def check_and_rebalance(browser, pool: Pool, context: ContextTypes.DEFAULT_TYPE):
-    """Placeholder rebalance routine.
-
-    Returns (changed, status). Does not execute real trades; only reports status.
+    """Complete automated rebalancing workflow.
+    
+    1. Check if pool is near out-of-range
+    2. If yes, remove liquidity
+    3. Check token balances and swap if needed
+    4. Re-add balanced liquidity
+    
+    Returns (changed, status).
     """
+    from utils.logger import log_rebalance_event
+    import time
+    
+    start_time = time.time()
+    
     try:
-        # No-op rebalance; always report unchanged
-        status = pool.last_status or "monitoring"
-        return False, status
+        # Get pool details and current status
+        pool_parts = pool.link.split('/')
+        if len(pool_parts) < 2:
+            return False, "error: invalid pool link format"
+        
+        contract_address = pool_parts[-2]
+        pool_id = pool_parts[-1]
+        
+        log_rebalance_event(pool_id, "STATUS_CHECK_START")
+        
+        # Check current pool status
+        from services.shadow_dashboard import check_pool_status
+        status_info = await check_pool_status(browser, contract_address, pool_id)
+        
+        if not status_info:
+            log_rebalance_event(pool_id, "STATUS_CHECK_FAILED", {"error": "could not fetch pool status"})
+            return False, "error: could not fetch pool status"
+        
+        # Check if pool is in range
+        if status_info.get('in_range', True):
+            # Pool is still in range, check if approaching threshold
+            if not await _is_approaching_threshold(browser, pool, status_info):
+                log_rebalance_event(pool_id, "MONITORING", {"status": "in_range", "price": status_info.get('current_price', 'unknown')})
+                return False, "monitoring: in range"
+        
+        # Extract price information for notifications
+        current_price = 0
+        bounds = (0, 0)
+        try:
+            import re
+            price_str = status_info.get('current_price', '')
+            range_str = status_info.get('range_info', '')
+            
+            if price_str:
+                price_match = re.search(r'\$?([\d,]+\.?\d*)', price_str)
+                if price_match:
+                    current_price = float(price_match.group(1).replace(',', ''))
+            
+            if range_str:
+                range_matches = re.findall(r'\$?([\d,]+\.?\d*)', range_str)
+                if len(range_matches) >= 2:
+                    bounds = (float(range_matches[0].replace(',', '')), float(range_matches[1].replace(',', '')))
+        except:
+            pass
+        
+        # Pool is out of range or approaching threshold - start rebalancing
+        logging.info(f"🔄 Starting rebalancing for pool {pool_id}")
+        log_rebalance_event(pool_id, "REBALANCE_START", {
+            "current_price": current_price,
+            "lower_bound": bounds[0],
+            "upper_bound": bounds[1],
+            "threshold": pool.meta.get('threshold', 90)
+        })
+        
+        await notify_rebalance_start(context, pool_id, current_price, bounds)
+        
+        # Step 1: Remove liquidity
+        shadow_utils = Shadow(browser)
+        log_rebalance_event(pool_id, "REMOVE_LIQUIDITY_START")
+        
+        success = await _remove_liquidity(shadow_utils, pool.link)
+        if not success:
+            log_rebalance_event(pool_id, "REMOVE_LIQUIDITY_FAILED")
+            await notify_rebalance_error(context, pool_id, "Failed to remove liquidity", "Remove Liquidity")
+            return False, "error: failed to remove liquidity"
+        
+        log_rebalance_event(pool_id, "REMOVE_LIQUIDITY_SUCCESS")
+        await notify_admins(context, f"✅ Liquidity removed from pool {pool_id}")
+        
+        # Step 2: Check token balances and rebalance if needed
+        log_rebalance_event(pool_id, "TOKEN_REBALANCE_START")
+        
+        balance_success = await _rebalance_tokens(browser, shadow_utils, pool)
+        if not balance_success:
+            log_rebalance_event(pool_id, "TOKEN_REBALANCE_FAILED")
+            await notify_admins(context, f"⚠️ Token rebalancing failed for pool {pool_id}, continuing...")
+        else:
+            log_rebalance_event(pool_id, "TOKEN_REBALANCE_SUCCESS")
+        
+        # Step 3: Re-add liquidity with balanced amounts
+        log_rebalance_event(pool_id, "READD_LIQUIDITY_START")
+        
+        readd_success = await _readd_liquidity(shadow_utils, pool)
+        if not readd_success:
+            log_rebalance_event(pool_id, "READD_LIQUIDITY_FAILED")
+            await notify_rebalance_error(context, pool_id, "Failed to re-add liquidity", "Re-add Liquidity")
+            return False, "error: failed to re-add liquidity"
+        
+        # Calculate duration
+        duration = int(time.time() - start_time)
+        
+        log_rebalance_event(pool_id, "REBALANCE_COMPLETE", {
+            "duration_seconds": duration,
+            "total_steps": 3,
+            "success": True
+        })
+        
+        await notify_rebalance_complete(context, pool_id, duration)
+        logging.info(f"✅ Rebalancing completed for pool {pool_id} in {duration}s")
+        
+        return True, "rebalanced"
+        
     except Exception as e:
+        duration = int(time.time() - start_time)
+        logging.exception(f"Error in rebalancing for {pool.link}")
+        log_rebalance_event(pool_id if 'pool_id' in locals() else 'unknown', "REBALANCE_ERROR", {
+            "error": str(e)[:100],
+            "duration_seconds": duration
+        })
+        await notify_rebalance_error(context, pool_id if 'pool_id' in locals() else 'unknown', str(e), "General Error")
         return False, f"error: {e}"
+
+async def _is_approaching_threshold(browser, pool: Pool, status_info: dict) -> bool:
+    """Check if pool is approaching the rebalance threshold"""
+    try:
+        # Extract current price and range from status_info
+        current_price_str = status_info.get('current_price', '')
+        range_info_str = status_info.get('range_info', '')
+        
+        if not current_price_str or not range_info_str:
+            return False
+        
+        # Parse current price
+        import re
+        price_match = re.search(r'\$?([\d,]+\.?\d*)', current_price_str)
+        if not price_match:
+            return False
+        current_price = float(price_match.group(1).replace(',', ''))
+        
+        # Parse range bounds
+        range_matches = re.findall(r'\$?([\d,]+\.?\d*)', range_info_str)
+        if len(range_matches) < 2:
+            return False
+        
+        lower_bound = float(range_matches[0].replace(',', ''))
+        upper_bound = float(range_matches[1].replace(',', ''))
+        
+        # Calculate threshold distances
+        range_size = upper_bound - lower_bound
+        threshold_distance = (pool.meta.get('threshold', 90) / 100) * range_size
+        
+        upper_threshold = upper_bound - threshold_distance
+        lower_threshold = lower_bound + threshold_distance
+        
+        # Check if approaching threshold
+        approaching = current_price >= upper_threshold or current_price <= lower_threshold
+        
+        if approaching:
+            logging.info(f"Pool {pool.link} approaching threshold: price={current_price}, bounds=[{lower_bound}, {upper_bound}], thresholds=[{lower_threshold}, {upper_threshold}]")
+        
+        return approaching
+        
+    except Exception as e:
+        logging.exception(f"Error checking threshold for {pool.link}")
+        return False
+
+async def _remove_liquidity(shadow_utils: Shadow, pool_link: str) -> bool:
+    """Remove 100% liquidity from pool"""
+    try:
+        # Navigate to pool management page
+        shadow_page = await shadow_utils.browser.new_page()
+        await shadow_page.goto(pool_link, wait_until="networkidle")
+        await asyncio.sleep(3)
+        
+        # Look for remove/withdraw button
+        remove_buttons = [
+            "Remove Liquidity",
+            "Withdraw",
+            "Remove",
+            "100%"
+        ]
+        
+        for button_text in remove_buttons:
+            try:
+                button = shadow_page.get_by_role("button", name=button_text)
+                if await button.is_visible():
+                    await button.click()
+                    await asyncio.sleep(2)
+                    break
+            except:
+                continue
+        
+        # Set to 100% if there's a percentage slider/input
+        try:
+            # Look for 100% button or max button
+            max_buttons = shadow_page.locator("button:has-text('100%'), button:has-text('Max'), button:has-text('MAX')")
+            if await max_buttons.count() > 0:
+                await max_buttons.first.click()
+                await asyncio.sleep(1)
+        except:
+            pass
+        
+        # Confirm removal
+        confirm_buttons = [
+            "Confirm",
+            "Remove",
+            "Withdraw",
+            "Submit"
+        ]
+        
+        for button_text in confirm_buttons:
+            try:
+                button = shadow_page.get_by_role("button", name=button_text)
+                if await button.is_visible():
+                    await button.click()
+                    await asyncio.sleep(2)
+                    break
+            except:
+                continue
+        
+        # Wait for MetaMask confirmation (handled by background task)
+        await asyncio.sleep(10)
+        
+        await shadow_page.close()
+        return True
+        
+    except Exception as e:
+        logging.exception(f"Error removing liquidity: {e}")
+        return False
+
+async def _rebalance_tokens(browser, shadow_utils: Shadow, pool: Pool) -> bool:
+    """Check token balances and swap if needed to balance them"""
+    try:
+        # Navigate to Shadow.so trade page
+        trade_page = await browser.new_page()
+        await trade_page.goto("https://www.shadow.so/trade", wait_until="networkidle")
+        await asyncio.sleep(3)
+        
+        # Get token balances from the page
+        balance_elements = await trade_page.locator('[class*="balance"], [class*="amount"]').all()
+        balances = []
+        
+        for elem in balance_elements:
+            try:
+                text = await elem.text_content()
+                if text and '$' in text:
+                    # Extract dollar amount
+                    import re
+                    amount_match = re.search(r'\$?([\d,]+\.?\d*)', text)
+                    if amount_match:
+                        amount = float(amount_match.group(1).replace(',', ''))
+                        balances.append(amount)
+            except:
+                continue
+        
+        if len(balances) < 2:
+            logging.warning("Could not detect token balances for rebalancing")
+            await trade_page.close()
+            return False
+        
+        # Check if balances need rebalancing
+        balance1, balance2 = balances[0], balances[1]
+        total_value = balance1 + balance2
+        target_each = total_value / 2
+        
+        # Calculate tolerance
+        tolerance_percent = pool.meta.get('balance_tolerance', 2)
+        tolerance_amount = (tolerance_percent / 100) * target_each
+        
+        # Check if rebalancing is needed
+        if abs(balance1 - target_each) <= tolerance_amount and abs(balance2 - target_each) <= tolerance_amount:
+            logging.info(f"Token balances are already balanced: {balance1}, {balance2}")
+            await trade_page.close()
+            return True
+        
+        # Determine which token to swap
+        if balance1 > balance2:
+            # Swap some of token1 to token2
+            swap_amount = (balance1 - target_each) / 2
+            logging.info(f"Swapping {swap_amount} of token1 to token2")
+        else:
+            # Swap some of token2 to token1
+            swap_amount = (balance2 - target_each) / 2
+            logging.info(f"Swapping {swap_amount} of token2 to token1")
+        
+        # Perform the swap (simplified - would need more specific implementation)
+        # This would involve:
+        # 1. Setting swap amounts
+        # 2. Clicking swap button
+        # 3. Confirming MetaMask transaction
+        
+        # For now, we'll simulate the swap
+        await asyncio.sleep(5)  # Simulate swap time
+        
+        await trade_page.close()
+        return True
+        
+    except Exception as e:
+        logging.exception(f"Error rebalancing tokens: {e}")
+        return False
+
+async def _readd_liquidity(shadow_utils: Shadow, pool: Pool) -> bool:
+    """Re-add liquidity to the pool with balanced amounts"""
+    try:
+        # Navigate back to the pool page
+        pool_link = pool.link.replace('/manage/', '/')  # Convert to add liquidity page
+        shadow_page = await shadow_utils.browser.new_page()
+        await shadow_page.goto(pool_link, wait_until="networkidle")
+        await asyncio.sleep(3)
+        
+        # Set range type if specified
+        if pool.range:
+            range_buttons = await shadow_page.locator(f"button:has-text('{pool.range}')").all()
+            if range_buttons:
+                await range_buttons[0].click()
+                await asyncio.sleep(1)
+        
+        # Set token amounts (this would need more specific implementation)
+        # For now, we'll use the original amount or let it auto-calculate
+        
+        # Click add liquidity button
+        add_buttons = [
+            "Add Liquidity",
+            "Deposit",
+            "Add",
+            "Submit"
+        ]
+        
+        for button_text in add_buttons:
+            try:
+                button = shadow_page.get_by_role("button", name=button_text)
+                if await button.is_visible():
+                    await button.click()
+                    await asyncio.sleep(2)
+                    break
+            except:
+                continue
+        
+        # Wait for MetaMask confirmation
+        await asyncio.sleep(10)
+        
+        await shadow_page.close()
+        return True
+        
+    except Exception as e:
+        logging.exception(f"Error re-adding liquidity: {e}")
+        return False

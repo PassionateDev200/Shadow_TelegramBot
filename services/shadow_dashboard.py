@@ -11,7 +11,7 @@ async def fetch_dashboard_pools(browser) -> List[Dict]:
     try:
         # Navigate to the dashboard
         dashboard_page = await browser.new_page()
-        await dashboard_page.goto("https://www.shadow.so/dashboard", wait_until="networkidle", timeout=60000)
+        await dashboard_page.goto("https://www.shadow.so/dashboard", wait_until="networkidle")
         
         # Wait for the page to load completely
         await asyncio.sleep(5)
@@ -34,7 +34,7 @@ async def fetch_dashboard_pools(browser) -> List[Dict]:
         # Strategy 2: Look for actual pool data in "My Pools" section
         try:
             # Look for the "My Pools" section
-            my_pools_section = await dashboard_page.locator(':has-text("My Pools")').first
+            my_pools_section = dashboard_page.locator(':has-text("My Pools")').first
             if await my_pools_section.count() == 0:
                 logging.info("No 'My Pools' section found")
                 await dashboard_page.close()
@@ -123,7 +123,7 @@ async def fetch_dashboard_pools(browser) -> List[Dict]:
                                 }
                                 
                                 # Try to get additional info from the parent element
-                                parent = await link.locator('..').first
+                                parent = link.locator('..').first
                                 if await parent.count() > 0:
                                     parent_text = await parent.text_content()
                                     if parent_text:
@@ -242,7 +242,7 @@ async def fetch_dashboard_pools(browser) -> List[Dict]:
         if not pools_data:
             try:
                 # Look for the "My Pools" section specifically
-                my_pools_section = await dashboard_page.locator(':has-text("My Pools")').first
+                my_pools_section = dashboard_page.locator(':has-text("My Pools")').first
                 if await my_pools_section.count() > 0:
                     logging.info("Found My Pools section")
                     
@@ -258,9 +258,9 @@ async def fetch_dashboard_pools(browser) -> List[Dict]:
                             href = await element.get_attribute('href')
                             if not href:
                                 # For buttons, look for onclick or parent link
-                                parent = await element.locator('..').first
+                                parent = element.locator('..').first
                                 if await parent.count() > 0:
-                                    parent_link = await parent.locator('a[href*="/manage/"]').first
+                                    parent_link = parent.locator('a[href*="/manage/"]').first
                                     if await parent_link.count() > 0:
                                         href = await parent_link.get_attribute('href')
                             
