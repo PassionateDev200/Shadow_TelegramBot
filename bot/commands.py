@@ -2,6 +2,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 import asyncio
 import logging
+import os
 
 from services.launch_browser import launch_browser
 from services.metamask_connect import metamask_connect
@@ -91,6 +92,7 @@ class Bot:
             await update.message.reply_text("Hello! I'm your liquidity rebalance automation bot")
 
     async def connect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Connect with full credentials (password + 12-word seed phrase) for first-time setup"""
         if update.message:
             if not self._is_authorized(update):
                 await update.message.reply_text("Unauthorized.")
@@ -113,7 +115,13 @@ class Bot:
                 await update.message.reply_text("✅ Using previously stored MetaMask credentials.")
                 
             else:
-                await update.message.reply_text("❌ No credentials provided and none stored. Please provide password and 12-word seed phrase.\nUsage: /connect [password] [word1] [word2] ... [word12]")
+                await update.message.reply_text(
+                    "❌ No credentials provided and none stored.\n\n"
+                    "For FIRST TIME setup:\n"
+                    "/connect [password] [word1] [word2] ... [word12]\n\n"
+                    "If MetaMask is already set up, use:\n"
+                    "/connect_password [password]"
+                )
                 return
             
             if self.browser is None:
@@ -127,6 +135,76 @@ class Bot:
                     await update.message.reply_text("✅ Browser is connected successfully.")
                 except Exception as e:
                     await update.message.reply_text(f"❌ Connection failed: {str(e)[:100]}...")
+                    # Clean up if connection failed
+                    if self.browser:
+                        try:
+                            await self.browser.close()
+                        except:
+                            pass
+                        self.browser = None
+                    raise
+            else:
+                await update.message.reply_text("Browser is already connected.")
+
+    async def connect_password_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Connect using only password (when MetaMask is already set up in browser profile)"""
+        if update.message:
+            if not self._is_authorized(update):
+                await update.message.reply_text("Unauthorized.")
+                return
+            
+            args = context.args
+            
+            # Check if password is provided
+            if args and len(args) >= 1:
+                password = args[0]
+                
+                # Store password only (keep existing seed phrase if any)
+                existing_seed = config.METAMASK_PHRASE
+                if self._has_stored_credentials():
+                    # Load existing credentials to get seed phrase
+                    self._load_stored_credentials()
+                    existing_seed = config.METAMASK_PHRASE
+                
+                if existing_seed:
+                    # Store credentials with existing seed phrase
+                    self._store_credentials(password, existing_seed)
+                    await update.message.reply_text("✅ MetaMask password updated.")
+                else:
+                    # No seed phrase available - store password only
+                    config.METAMASK_PASSWORD = password
+                    os.environ['METAMASK_PASSWORD'] = password
+                    await update.message.reply_text("✅ MetaMask password set (seed phrase not changed).")
+                    
+            else:
+                await update.message.reply_text(
+                    "❌ Password required.\n\n"
+                    "Usage: /connect_password [password]\n\n"
+                    "⚠️ Use this command ONLY if MetaMask is already set up in the browser profile.\n"
+                    "For first-time setup, use: /connect [password] [12-word seed phrase]"
+                )
+                return
+            
+            if self.browser is None:
+                await update.message.reply_text("🔄 Connecting to Browser (password-only mode)...")
+                try:
+                    self.browser = await launch_browser()
+                    await update.message.reply_text("Browser launched, connecting to MetaMask...")
+                    await metamask_connect(self.browser)
+                    await update.message.reply_text("MetaMask connected, connecting to Shadow.so...")
+                    await shadow_connect(self.browser)
+                    await update.message.reply_text("✅ Browser is connected successfully.")
+                except Exception as e:
+                    error_msg = str(e)
+                    if "GET STARTED" in error_msg or "first time" in error_msg.lower():
+                        await update.message.reply_text(
+                            "❌ MetaMask needs first-time setup.\n\n"
+                            "Please use the full /connect command with your 12-word seed phrase:\n"
+                            "/connect [password] [word1] [word2] ... [word12]"
+                        )
+                    else:
+                        await update.message.reply_text(f"❌ Connection failed: {error_msg[:100]}...")
+                    
                     # Clean up if connection failed
                     if self.browser:
                         try:
@@ -246,29 +324,52 @@ class Bot:
             logging.error(f"Failed to remove credentials file: {e}")
 
     async def disconnect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Disconnect browser but KEEP credentials and MetaMask profile for next connection"""
         if update.message:
             if not self._is_authorized(update):
                 await update.message.reply_text("Unauthorized.")
                 return
+                
+            args = context.args
+            clear_all = args and args[0].lower() in ['clear', 'reset', 'all']
+            
             if self.browser is not None:
                 await self.browser.close()
                 self.browser = None
-                # Clear all pools when disconnecting
-                pools_count = len(self.pools)
-                self.pools = []
-                # Reset settings to default values
-                self.settings = {
-                    "threshold": 90,
-                    "balance_tolerance": 2
-                }
-                # Reset config values to defaults as well
-                config.REBALANCE_THRESHOLD = 90
-                config.BALANCE_TOLERANCE = 2
-                # Clear stored credentials
-                self._clear_stored_credentials()
-                # Save the cleared state with default settings
-                save_state(self.pools, self.settings)
-                await update.message.reply_text(f"Browser is disconnected. Cleared {pools_count} pool(s) from monitoring. Settings and credentials reset to defaults.")
+                
+                if clear_all:
+                    # Clear EVERYTHING including credentials and profile
+                    pools_count = len(self.pools)
+                    self.pools = []
+                    # Reset settings to default values
+                    self.settings = {
+                        "threshold": 90,
+                        "balance_tolerance": 2
+                    }
+                    # Reset config values to defaults as well
+                    config.REBALANCE_THRESHOLD = 90
+                    config.BALANCE_TOLERANCE = 2
+                    # Clear stored credentials
+                    self._clear_stored_credentials()
+                    # Save the cleared state with default settings
+                    save_state(self.pools, self.settings)
+                    await update.message.reply_text(
+                        f"✅ Browser disconnected and ALL data cleared.\n"
+                        f"• Cleared {pools_count} pool(s)\n"
+                        f"• Settings reset to defaults\n"
+                        f"• Credentials cleared\n\n"
+                        f"ℹ️ Next connection will require 12-word seed phrase."
+                    )
+                else:
+                    # Only disconnect browser, keep everything else
+                    await update.message.reply_text(
+                        f"✅ Browser disconnected.\n\n"
+                        f"• {len(self.pools)} pool(s) still monitored\n"
+                        f"• Settings preserved\n"
+                        f"• Credentials saved\n\n"
+                        f"ℹ️ Use /connect_password to reconnect quickly.\n"
+                        f"To clear everything: /disconnect clear"
+                    )
             else:
                 await update.message.reply_text("Browser is not connected.")
 
@@ -633,15 +734,30 @@ class Bot:
             if not self._is_authorized(update):
                 await update.message.reply_text("Unauthorized.")
                 return
-            txt = """○ /connect [password] [12-word seed phrase] — Connect browser (credentials required only first time)
-○ /disconnect — Disconnect browser and clear all data including stored credentials
-○ /add [pool_link] [range_type] [token] [amount] — Add a pool link to monitor
-○ /remove [link] — Remove a pool link
-○ /list — Fetch and display all pools from Shadow.so dashboard with Pool IDs and contract addresses
-○ /status — Force status check and update (now includes Pool IDs from Shadow.so dashboard)
-○ /set_threshold [value] — Set global rebalance trigger threshold (default: 90%)
-○ /set_balance_tolerance [value] — Set global balance tolerance (default: 2%)
-○ /help — List available commands
+            txt = """🤖 Shadow Liquidity Bot Commands
+
+🔐 CONNECTION (Choose ONE):
+• /connect [password] [word1] ... [word12] — First-time setup with 12-word seed phrase
+• /connect_password [password] — Quick reconnect (only password, MetaMask already set up)
+
+🔌 DISCONNECTION:
+• /disconnect — Close browser (keeps credentials & data)
+• /disconnect clear — Clear EVERYTHING (requires seed phrase next time)
+
+📊 POOL MANAGEMENT:
+• /add [pool_link] [range_type] [token] [amount] — Add pool to monitor
+• /remove [link] — Withdraw 100% from pool
+• /list — Show all pools from Shadow.so dashboard
+• /status — Check current status of all pools
+
+⚙️ SETTINGS:
+• /set_threshold [value] — Set rebalance trigger (default: 90%)
+• /set_balance_tolerance [value] — Set balance tolerance (default: 2%)
+
+ℹ️ OTHER:
+• /help — Show this help message
+
+💡 TIP: After first setup, use /connect_password for faster reconnection!
 """
             await update.message.reply_text(txt)
 

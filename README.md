@@ -12,15 +12,29 @@
 - ✅ **Real-time Notifications** - Telegram alerts for all activities
 
 ### Telegram Bot Commands
-- `/connect [password] [12-word seed phrase]` — Connect MetaMask wallet
-- `/disconnect` — Disconnect and clear credentials
+
+**Connection (Choose ONE):**
+- `/connect [password] [word1] ... [word12]` — First-time setup with 12-word seed phrase
+- `/connect_password [password]` — Quick reconnect (only password needed after first setup)
+
+**Disconnection:**
+- `/disconnect` — Close browser (keeps credentials & data for fast reconnect)
+- `/disconnect clear` — Clear EVERYTHING (requires seed phrase next time)
+
+**Pool Management:**
 - `/add [pool_link] [range_type] [token] [amount]` — Add pool for monitoring
 - `/remove [link]` — Remove liquidity (100% withdrawal)
 - `/list` — List all monitored pools with status
 - `/status` — Force status check and update
+
+**Settings:**
 - `/set_threshold [value]` — Set rebalance trigger threshold (default: 90%)
 - `/set_balance_tolerance [value]` — Set balance tolerance (default: 2%)
+
+**Other:**
 - `/help` — Show available commands
+
+**💡 TIP:** After first setup with `/connect`, use `/connect_password` for faster reconnection without entering your 12-word seed phrase!
 
 ### Security & Management
 - ✅ **User Whitelisting** - Only authorized users can control the bot
@@ -34,6 +48,62 @@
 - **Google Chrome or Microsoft Edge** installed
 - **Telegram Bot Token** from [@BotFather](https://t.me/botfather)
 - **MetaMask wallet** with seed phrase and password
+
+## 🔐 MetaMask Connection Guide
+
+### First Time Setup
+When you first use the bot, you need to provide your MetaMask credentials:
+
+```
+/connect your_password word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12
+```
+
+✅ The bot stores your credentials securely in the `user_profile` directory
+✅ MetaMask extension data is saved in the browser profile
+✅ You won't need to enter the 12-word seed phrase again!
+
+### After First Setup
+For all future connections, simply use:
+
+```
+/connect_password your_password
+```
+
+This quick command:
+- ✅ Uses your stored credentials
+- ✅ Opens MetaMask with just your password
+- ✅ No need to type 12 words every time!
+
+### When to Use Full /connect vs /connect_password
+
+**Use `/connect [password] [12 words]` when:**
+- 🆕 First time setting up the bot
+- 🔄 After using `/disconnect clear` (clears everything)
+- 🗑️ If you deleted the `user_profile` directory
+
+**Use `/connect_password [password]` when:**
+- ✨ MetaMask is already set up in browser profile
+- 🔄 After a normal `/disconnect` (keeps credentials)
+- ⚡ You want to reconnect quickly
+
+### Disconnection Options
+
+**Normal Disconnect (Recommended):**
+```
+/disconnect
+```
+- Closes the browser
+- ✅ Keeps your credentials saved
+- ✅ Keeps MetaMask profile intact
+- ✅ Use `/connect_password` to reconnect quickly
+
+**Full Reset:**
+```
+/disconnect clear
+```
+- ❌ Clears ALL data including credentials
+- ❌ Removes MetaMask profile
+- ⚠️ Next connection will require full 12-word seed phrase again
 
 ## 🚀 Quick Start (Windows)
 

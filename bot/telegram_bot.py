@@ -35,6 +35,7 @@ def telegram_bot():
             # Add command handlers
             app.add_handler(CommandHandler("start", bot.start_command))
             app.add_handler(CommandHandler("connect", bot.connect_command))
+            app.add_handler(CommandHandler("connect_password", bot.connect_password_command))
             app.add_handler(CommandHandler("disconnect", bot.disconnect_command))
             app.add_handler(CommandHandler("add", bot.add_command))
             app.add_handler(CommandHandler("remove", bot.remove_command))

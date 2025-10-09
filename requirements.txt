@@ -1,7 +1,4 @@
 python-telegram-bot==20.7
-playwright==1.40.0
-asyncio
-logging
-dataclasses
+playwright>=1.49.0
 python-dotenv
-pyinstaller==6.2.0
+pyinstaller>=6.16.0
