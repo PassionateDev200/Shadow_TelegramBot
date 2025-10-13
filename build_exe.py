@@ -22,9 +22,11 @@ def build_exe():
         print("❌ Error: main.py not found. Please ensure main.py exists in the project root.")
         return False
     
-    # PyInstaller command
+    # PyInstaller command - run as Python module for venv compatibility
     cmd = [
-        "pyinstaller",
+        sys.executable,
+        "-m",
+        "PyInstaller",
         "--onefile",                    # Create a single executable file
         "--console",                    # Show console window for debugging (change to --windowed to hide)
         "--name=ShadowLiquidityBot",    # Name of the executable
@@ -59,7 +61,13 @@ def build_exe():
     try:
         # Run PyInstaller
         print("📦 Running PyInstaller...")
+        print(f"🔍 Command: {' '.join(cmd)}")
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        
+        # Show output
+        if result.stdout:
+            print(result.stdout)
+        
         print("✅ Build completed successfully!")
         
         # Show output location
@@ -76,10 +84,25 @@ def build_exe():
         
     except subprocess.CalledProcessError as e:
         print(f"❌ Build failed: {e}")
-        print(f"Error output: {e.stderr}")
+        if e.stdout:
+            print(f"Output: {e.stdout}")
+        if e.stderr:
+            print(f"Error output: {e.stderr}")
+        return False
+    except FileNotFoundError as e:
+        print(f"❌ File not found error: {e}")
+        print(f"🔍 Checking if required files exist:")
+        print(f"   main.py: {main_script.exists()}")
+        print(f"   services/: {(project_root / 'services').exists()}")
+        print(f"   utils/: {(project_root / 'utils').exists()}")
+        print(f"   models/: {(project_root / 'models').exists()}")
+        print(f"   bot/: {(project_root / 'bot').exists()}")
+        print(f"   config.py: {(project_root / 'config.py').exists()}")
         return False
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def clean_build():
